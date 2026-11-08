@@ -786,6 +786,10 @@ def spectrogram_batch(
         elif log_mel == "log10":
             spectrogram = np.log10(spectrogram)
         elif log_mel == "dB":
+            if db_range is not None:
+                # Discarded frames must not raise the per-waveform maximum used for dB clipping.
+                for i, num_frames in enumerate(true_num_frames):
+                    spectrogram[i, num_frames:] = 0.0
             if power == 1.0:
                 spectrogram = amplitude_to_db_batch(spectrogram, reference, min_value, db_range)
             elif power == 2.0:
