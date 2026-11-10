@@ -979,13 +979,16 @@ class AdafactorSchedule(LambdaLR):
 
     def get_lr(self):
         opt = self.optimizer
-        lrs = [
-            opt._get_lr(group, opt.state[group["params"][0]])
-            for group in opt.param_groups
-            if group["params"][0].grad is not None
-        ]
-        if len(lrs) == 0:
-            lrs = self.base_lrs  # if called before stepping
+        lrs = []
+        previous_lrs = getattr(self, "_last_lr", self.base_lrs)
+        for index, group in enumerate(opt.param_groups):
+            lr = previous_lrs[index]
+            for param in group["params"]:
+                state = opt.state.get(param)
+                if param.grad is not None and state and state.get("step", 0) > 0:
+                    lr = opt._get_lr(group, state)
+                    break
+            lrs.append(lr)
         return lrs
 
 

@@ -28,6 +28,7 @@ if is_torch_available():
 
     from transformers import (
         Adafactor,
+        AdafactorSchedule,
         AdamW,
         get_constant_schedule,
         get_constant_schedule_with_warmup,
@@ -109,6 +110,58 @@ class OptimizationTest(unittest.TestCase):
             w.grad.detach_()  # No zero_grad() function on simple tensors. we do it ourselves.
             w.grad.zero_()
         self.assertListAlmostEqual(w.tolist(), [0.4, 0.2, -0.5], tol=1e-2)
+
+    def test_adafactor_schedule_parameter_groups(self):
+        for inactive_index in (None, 0, 1, 2):
+            with self.subTest(inactive_index=inactive_index):
+                params = [torch.nn.Parameter(torch.full((2, 3), float(i + 1))) for i in range(3)]
+                optimizer = Adafactor([{"params": [p]} for p in params], warmup_init=True)
+                scheduler = AdafactorSchedule(optimizer, initial_lr=0.123)
+                self.assertEqual(scheduler.get_last_lr(), [0.123] * 3)
+
+                for step in range(1, 4):
+                    previous_lrs = list(scheduler.get_last_lr())
+                    for index, param in enumerate(params):
+                        param.grad = None if index == inactive_index else torch.ones_like(param)
+                    optimizer.step()
+                    expected = [
+                        previous_lrs[index]
+                        if index == inactive_index
+                        else float(optimizer.state[param]["RMS"]) * 1e-6 * step
+                        for index, param in enumerate(params)
+                    ]
+                    scheduler.step()
+                    self.assertListAlmostEqual(scheduler.get_last_lr(), expected, tol=1e-8)
+                    self.assertListAlmostEqual([group["lr"] for group in optimizer.param_groups], expected, tol=1e-8)
+
+                previous_lrs = list(scheduler.get_last_lr())
+                optimizer.zero_grad(set_to_none=True)
+                optimizer.step()
+                scheduler.step()
+                self.assertListAlmostEqual(scheduler.get_last_lr(), previous_lrs, tol=1e-8)
+
+    def test_adafactor_schedule_unused_parameters_and_startup(self):
+        unused = torch.nn.Parameter(torch.ones(2, 3))
+        active = torch.nn.Parameter(torch.full((2, 3), 2.0))
+        optimizer = Adafactor([{"params": []}, {"params": [unused, active]}], warmup_init=True)
+        # A gradient may exist before the optimizer has initialized its state.
+        active.grad = torch.ones_like(active)
+        scheduler = AdafactorSchedule(optimizer, initial_lr=0.123)
+        self.assertEqual(scheduler.get_last_lr(), [0.123, 0.123])
+        self.assertEqual(len(optimizer.state), 0)
+        optimizer.step()
+        expected_lr = float(optimizer.state[active]["RMS"]) * 1e-6
+        scheduler.step()
+        self.assertListAlmostEqual(scheduler.get_last_lr(), [0.123, expected_lr], tol=1e-8)
+        self.assertNotIn(unused, optimizer.state)
+        self.assertTrue(torch.equal(unused, torch.ones_like(unused)))
+
+        optimizer.zero_grad(set_to_none=True)
+        unused.grad = torch.ones_like(unused)
+        optimizer.step()
+        expected_lr = float(optimizer.state[unused]["RMS"]) * 1e-6
+        scheduler.step()
+        self.assertListAlmostEqual(scheduler.get_last_lr(), [0.123, expected_lr], tol=1e-8)
 
 
 @require_torch
