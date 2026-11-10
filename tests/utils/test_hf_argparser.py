@@ -348,6 +348,28 @@ class HfArgumentParserTest(unittest.TestCase):
         expected.add_argument("--foo_str", "--foo-str", nargs="+", default=["Hallo", "Bonjour", "Hello"], type=str)
         self.argparsersEqual(parser, expected)
 
+    def test_args_file_flag(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_file = Path(tmp_dir) / "first.args"
+            second_file = Path(tmp_dir) / "second.args"
+            first_file.write_text("--foo 7 --baz first", encoding="utf-8")
+            second_file.write_text("--foo 11 --baz second", encoding="utf-8")
+
+            for flag in ["--args_file", "--args-file", "-f"]:
+                for extra_args, expected in [
+                    ([], WithDefaultExample(foo=7, baz="first")),
+                    ([flag, str(second_file)], WithDefaultExample(foo=11, baz="second")),
+                    (["--foo", "13"], WithDefaultExample(foo=13, baz="first")),
+                ]:
+                    with self.subTest(flag=flag, extra_args=extra_args):
+                        parser = HfArgumentParser(WithDefaultExample)
+                        (parsed,) = parser.parse_args_into_dataclasses(
+                            [flag, str(first_file), *extra_args],
+                            args_file_flag=flag,
+                            look_for_args_file=False,
+                        )
+                        self.assertEqual(parsed, expected)
+
     def test_parse_dict(self):
         parser = HfArgumentParser(BasicExample)
 
